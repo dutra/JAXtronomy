@@ -9,6 +9,10 @@ import numpy as np
 jax.config.update("jax_enable_x64", True)
 
 __all__ = ["SinglePlaneBulk"]
+COMPACT_PROFILE_TYPES = {
+    "PJAFFE_COMPACT",
+    "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
+}
 
 
 class SinglePlaneBulk(ProfileListBase):
@@ -30,13 +34,13 @@ class SinglePlaneBulk(ProfileListBase):
         """
 
         self.unique_lens_model_list = unique_lens_model_list
-        if isinstance(profile_kwargs_list, list):
-            profile_kwargs_list += [{}]
+        normalized_profile_kwargs_list = list(profile_kwargs_list or [{} for _ in unique_lens_model_list])
+        normalized_profile_kwargs_list.append({})
 
         ProfileListBase.__init__(
             self,
             unique_lens_model_list + ["NULL"],
-            profile_kwargs_list,
+            normalized_profile_kwargs_list,
             lens_redshift_list=None,
             z_source_convention=None,
         )
@@ -45,6 +49,21 @@ class SinglePlaneBulk(ProfileListBase):
             _select_kwargs(self.func_list[i], self.param_name_list[i])
             for i in range(len(self.func_list))
         ]
+        model_list_with_null = unique_lens_model_list + ["NULL"]
+        self._compact_profile_mask = jnp.asarray(
+            [lens_type in COMPACT_PROFILE_TYPES for lens_type in model_list_with_null],
+            dtype=bool,
+        )
+        compact_skip_factors = []
+        for i, lens_type in enumerate(unique_lens_model_list):
+            if lens_type in COMPACT_PROFILE_TYPES:
+                compact_skip_factors.append(
+                    float(normalized_profile_kwargs_list[i].get("compact_skip_factor", 1.0))
+                )
+            else:
+                compact_skip_factors.append(1.0)
+        compact_skip_factors.append(1.0)
+        self._compact_skip_factor = jnp.asarray(compact_skip_factors, dtype=float)
 
     # This function is called outside of JIT
     def prepare_ray_shooting_kwargs(
@@ -125,7 +144,36 @@ class SinglePlaneBulk(ProfileListBase):
         # This function is called iteratively by jax.lax.map to compute deflection angles for each deflector
         def body_fun(xs):
             all_kwargs, index = xs[0], xs[1]
-            return lax.switch(index, self._derivatives_list, x, y, all_kwargs)
+            is_compact = self._compact_profile_mask[index]
+
+            def _compact_body(_):
+                support_radius = self._compact_skip_factor[index] * all_kwargs["Rs"]
+                x_shift = x - all_kwargs["center_x"]
+                y_shift = y - all_kwargs["center_y"]
+                inside_support = jnp.square(x_shift) + jnp.square(y_shift) <= jnp.square(
+                    jnp.maximum(support_radius, 0.0)
+                )
+
+                def _eval_compact(__):
+                    f_x, f_y = lax.switch(index, self._derivatives_list, x, y, all_kwargs)
+                    zeros = jnp.zeros_like(f_x)
+                    return jnp.where(inside_support, f_x, zeros), jnp.where(
+                        inside_support, f_y, zeros
+                    )
+
+                return lax.cond(
+                    jnp.any(inside_support),
+                    _eval_compact,
+                    lambda __: (jnp.zeros_like(x), jnp.zeros_like(y)),
+                    operand=None,
+                )
+
+            return lax.cond(
+                is_compact,
+                _compact_body,
+                lambda _: lax.switch(index, self._derivatives_list, x, y, all_kwargs),
+                operand=None,
+            )
 
         f_x, f_y = lax.map(body_fun, xs=(all_kwargs, index_list))
 

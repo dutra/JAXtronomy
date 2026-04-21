@@ -25,7 +25,9 @@ _JAXXED_MODELS = [
     "NFW_ELLIPSE_CSE",
     "NIE",
     "PJAFFE",
+    "PJAFFE_COMPACT",
     "PJAFFE_ELLIPSE_POTENTIAL",
+    "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
     "SHEAR",
     "SIE",
     "SIS",
@@ -98,7 +100,9 @@ _SUPPORTED_MODELS = [
     "NIE_SIMPLE",
     "PEMD",
     "PJAFFE",
+    "PJAFFE_COMPACT",
     "PJAFFE_ELLIPSE_POTENTIAL",
+    "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
     "POINT_MASS",
     "PSEUDO_DPL",
     "SERSIC",
@@ -623,12 +627,24 @@ def lens_class(
         from jaxtronomy.LensModel.Profiles.pseudo_jaffe import PseudoJaffe
 
         return PseudoJaffe(**profile_kwargs)
+    elif lens_type == "PJAFFE_COMPACT":
+        from jaxtronomy.LensModel.Profiles.pseudo_jaffe_compact import (
+            PseudoJaffeCompact,
+        )
+
+        return PseudoJaffeCompact(**profile_kwargs)
     elif lens_type == "PJAFFE_ELLIPSE_POTENTIAL":
         from jaxtronomy.LensModel.Profiles.pseudo_jaffe_ellipse_potential import (
             PseudoJaffeEllipsePotential,
         )
 
         return PseudoJaffeEllipsePotential(**profile_kwargs)
+    elif lens_type == "PJAFFE_ELLIPSE_POTENTIAL_COMPACT":
+        from jaxtronomy.LensModel.Profiles.pseudo_jaffe_ellipse_potential_compact import (
+            PseudoJaffeEllipsePotentialCompact,
+        )
+
+        return PseudoJaffeEllipsePotentialCompact(**profile_kwargs)
     # elif lens_type == "POINT_MASS":
     #     from lenstronomy.LensModel.Profiles.point_mass import PointMass
 

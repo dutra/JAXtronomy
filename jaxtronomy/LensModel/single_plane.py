@@ -8,6 +8,10 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 __all__ = ["SinglePlane"]
+COMPACT_PROFILE_TYPES = {
+    "PJAFFE_COMPACT",
+    "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
+}
 
 
 class SinglePlane(ProfileListBase):
@@ -30,6 +34,8 @@ class SinglePlane(ProfileListBase):
         :param alpha_scaling: scaling factor of deflection angle relative to z_source_convention
         """
         self._alpha_scaling = alpha_scaling
+        if profile_kwargs_list is None:
+            profile_kwargs_list = [{} for _ in lens_model_list]
         ProfileListBase.__init__(
             self,
             lens_model_list=lens_model_list,
@@ -37,6 +43,109 @@ class SinglePlane(ProfileListBase):
             lens_redshift_list=lens_redshift_list,
             z_source_convention=z_source_convention,
         )
+        self._compact_skip_factor = jnp.asarray(
+            [
+                float(profile_kwargs_list[i].get("compact_skip_factor", 1.0))
+                if lens_type in COMPACT_PROFILE_TYPES
+                else 1.0
+                for i, lens_type in enumerate(lens_model_list)
+            ],
+            dtype=float,
+        )
+
+    def _is_packed_kwargs(self, kwargs):
+        return isinstance(kwargs, dict) and "__packed__" in kwargs
+
+    def _packed_component_function(self, func, lens_type, x, y, kwargs, i):
+        if lens_type in {
+            "PJAFFE_ELLIPSE_POTENTIAL",
+            "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
+        }:
+            return func.function(
+                x,
+                y,
+                kwargs["sigma0"][i],
+                kwargs["Ra"][i],
+                kwargs["Rs"][i],
+                kwargs["e1"][i],
+                kwargs["e2"][i],
+                kwargs["center_x"][i],
+                kwargs["center_y"][i],
+            )
+        if lens_type == "SHEAR":
+            return func.function(x, y, kwargs["gamma1"][i], kwargs["gamma2"][i], 0.0, 0.0)
+        raise ValueError(f"Packed kwargs fast path does not support lens type {lens_type}.")
+
+    def _packed_component_derivatives(self, func, lens_type, x, y, kwargs, i):
+        if lens_type in {
+            "PJAFFE_ELLIPSE_POTENTIAL",
+            "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
+        }:
+            if lens_type in COMPACT_PROFILE_TYPES:
+                support_radius = self._compact_skip_factor[i] * kwargs["Rs"][i]
+                x_shift = x - kwargs["center_x"][i]
+                y_shift = y - kwargs["center_y"][i]
+                inside_support = jnp.square(x_shift) + jnp.square(y_shift) <= jnp.square(
+                    jnp.maximum(support_radius, 0.0)
+                )
+
+                def _eval_compact(_):
+                    f_x, f_y = func.derivatives(
+                        x,
+                        y,
+                        kwargs["sigma0"][i],
+                        kwargs["Ra"][i],
+                        kwargs["Rs"][i],
+                        kwargs["e1"][i],
+                        kwargs["e2"][i],
+                        kwargs["center_x"][i],
+                        kwargs["center_y"][i],
+                    )
+                    zeros = jnp.zeros_like(f_x)
+                    return jnp.where(inside_support, f_x, zeros), jnp.where(
+                        inside_support, f_y, zeros
+                    )
+
+                return jax.lax.cond(
+                    jnp.any(inside_support),
+                    _eval_compact,
+                    lambda _: (jnp.zeros_like(x), jnp.zeros_like(y)),
+                    operand=None,
+                )
+            return func.derivatives(
+                x,
+                y,
+                kwargs["sigma0"][i],
+                kwargs["Ra"][i],
+                kwargs["Rs"][i],
+                kwargs["e1"][i],
+                kwargs["e2"][i],
+                kwargs["center_x"][i],
+                kwargs["center_y"][i],
+            )
+        if lens_type == "SHEAR":
+            return func.derivatives(x, y, kwargs["gamma1"][i], kwargs["gamma2"][i], 0.0, 0.0)
+        raise ValueError(f"Packed kwargs fast path does not support lens type {lens_type}.")
+
+    def _packed_component_hessian(self, func, lens_type, x, y, kwargs, i):
+        if lens_type in {
+            "PJAFFE_ELLIPSE_POTENTIAL",
+            "PJAFFE_ELLIPSE_POTENTIAL_COMPACT",
+        }:
+            return func.hessian(
+                x,
+                y,
+                kwargs["sigma0"][i],
+                kwargs["Ra"][i],
+                kwargs["Rs"][i],
+                kwargs["e1"][i],
+                kwargs["e2"][i],
+                kwargs["center_x"][i],
+                kwargs["center_y"][i],
+            )
+        if lens_type == "SHEAR":
+            return func.hessian(x, y, kwargs["gamma1"][i], kwargs["gamma2"][i], 0.0, 0.0)
+        raise ValueError(f"Packed kwargs fast path does not support lens type {lens_type}.")
 
     @partial(jit, static_argnums=(0, 4))
     def ray_shooting(self, x, y, kwargs, k=None):
@@ -96,6 +205,15 @@ class SinglePlane(ProfileListBase):
         """
         x = jnp.array(x, dtype=float)
         y = jnp.array(y, dtype=float)
+        if self._is_packed_kwargs(kwargs):
+            if isinstance(k, int):
+                return self._packed_component_function(self.func_list[k], self._model_list[k], x, y, kwargs, k)
+            bool_list = self._bool_list(k)
+            potential = jnp.zeros_like(x)
+            for i, func in enumerate(self.func_list):
+                if bool_list[i] is True:
+                    potential += self._packed_component_function(func, self._model_list[i], x, y, kwargs, i)
+            return potential * self._alpha_scaling
         if isinstance(k, int):
             return self.func_list[k].function(x, y, **kwargs[k])
         bool_list = self._bool_list(k)
@@ -121,6 +239,17 @@ class SinglePlane(ProfileListBase):
         """
         x = jnp.array(x, dtype=float)
         y = jnp.array(y, dtype=float)
+        if self._is_packed_kwargs(kwargs):
+            if isinstance(k, int):
+                return self._packed_component_derivatives(self.func_list[k], self._model_list[k], x, y, kwargs, k)
+            bool_list = self._bool_list(k)
+            f_x, f_y = jnp.zeros_like(x), jnp.zeros_like(x)
+            for i, func in enumerate(self.func_list):
+                if bool_list[i] is True:
+                    f_x_i, f_y_i = self._packed_component_derivatives(func, self._model_list[i], x, y, kwargs, i)
+                    f_x += f_x_i
+                    f_y += f_y_i
+            return f_x * self._alpha_scaling, f_y * self._alpha_scaling
 
         if isinstance(k, int):
             return self.func_list[k].derivatives(x, y, **kwargs[k])
@@ -150,6 +279,31 @@ class SinglePlane(ProfileListBase):
         """
         x = jnp.array(x, dtype=float)
         y = jnp.array(y, dtype=float)
+        if self._is_packed_kwargs(kwargs):
+            if isinstance(k, int):
+                return self._packed_component_hessian(self.func_list[k], self._model_list[k], x, y, kwargs, k)
+            bool_list = self._bool_list(k)
+            f_xx, f_xy, f_yx, f_yy = (
+                jnp.zeros_like(x),
+                jnp.zeros_like(x),
+                jnp.zeros_like(x),
+                jnp.zeros_like(x),
+            )
+            for i, func in enumerate(self.func_list):
+                if bool_list[i] is True:
+                    f_xx_i, f_xy_i, f_yx_i, f_yy_i = self._packed_component_hessian(
+                        func, self._model_list[i], x, y, kwargs, i
+                    )
+                    f_xx += f_xx_i
+                    f_xy += f_xy_i
+                    f_yx += f_yx_i
+                    f_yy += f_yy_i
+            return (
+                f_xx * self._alpha_scaling,
+                f_xy * self._alpha_scaling,
+                f_yx * self._alpha_scaling,
+                f_yy * self._alpha_scaling,
+            )
         if isinstance(k, int):
             f_xx, f_xy, f_yx, f_yy = self.func_list[k].hessian(x, y, **kwargs[k])
             return f_xx, f_xy, f_yx, f_yy
