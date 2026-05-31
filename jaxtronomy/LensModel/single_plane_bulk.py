@@ -2,7 +2,11 @@ __author__ = "sibirrer"
 
 import jax
 from jax import jit, lax, numpy as jnp
-from jaxtronomy.LensModel.profile_list_base import ProfileListBase, _select_kwargs
+from jaxtronomy.LensModel.profile_list_base import (
+    ProfileListBase,
+    _select_hessian_kwargs,
+    _select_kwargs,
+)
 from functools import partial
 import numpy as np
 
@@ -47,6 +51,10 @@ class SinglePlaneBulk(ProfileListBase):
 
         self._derivatives_list = [
             _select_kwargs(self.func_list[i], self.param_name_list[i])
+            for i in range(len(self.func_list))
+        ]
+        self._hessian_list = [
+            _select_hessian_kwargs(self.func_list[i], self.param_name_list[i])
             for i in range(len(self.func_list))
         ]
         model_list_with_null = unique_lens_model_list + ["NULL"]
@@ -113,6 +121,7 @@ class SinglePlaneBulk(ProfileListBase):
         unique_kwargs = set(
             param for sublist in self.param_name_list for param in sublist
         )
+        unique_kwargs.update({"Rs", "center_x", "center_y"})
 
         for kwarg in unique_kwargs:
             all_kwargs[kwarg] = []
@@ -178,3 +187,60 @@ class SinglePlaneBulk(ProfileListBase):
         f_x, f_y = lax.map(body_fun, xs=(all_kwargs, index_list))
 
         return x - jnp.sum(f_x, axis=0), y - jnp.sum(f_y, axis=0)
+
+    @partial(jit, static_argnums=0)
+    def hessian(self, x, y, all_kwargs, index_list):
+        """Compute summed lensing-potential hessian components for bulk lenses.
+
+        The arguments all_kwargs and index_list should be obtained by calling
+        SinglePlaneBulk.prepare_ray_shooting_kwargs().
+        """
+
+        def body_fun(xs):
+            all_kwargs, index = xs[0], xs[1]
+            is_compact = self._compact_profile_mask[index]
+
+            def _zeros_like_hessian():
+                zeros = jnp.zeros_like(x)
+                return zeros, zeros, zeros, zeros
+
+            def _compact_body(_):
+                support_radius = self._compact_skip_factor[index] * all_kwargs["Rs"]
+                x_shift = x - all_kwargs["center_x"]
+                y_shift = y - all_kwargs["center_y"]
+                inside_support = jnp.square(x_shift) + jnp.square(y_shift) <= jnp.square(
+                    jnp.maximum(support_radius, 0.0)
+                )
+
+                def _eval_compact(__):
+                    f_xx, f_xy, f_yx, f_yy = lax.switch(index, self._hessian_list, x, y, all_kwargs)
+                    zeros = jnp.zeros_like(f_xx)
+                    return (
+                        jnp.where(inside_support, f_xx, zeros),
+                        jnp.where(inside_support, f_xy, zeros),
+                        jnp.where(inside_support, f_yx, zeros),
+                        jnp.where(inside_support, f_yy, zeros),
+                    )
+
+                return lax.cond(
+                    jnp.any(inside_support),
+                    _eval_compact,
+                    lambda __: _zeros_like_hessian(),
+                    operand=None,
+                )
+
+            return lax.cond(
+                is_compact,
+                _compact_body,
+                lambda _: lax.switch(index, self._hessian_list, x, y, all_kwargs),
+                operand=None,
+            )
+
+        f_xx, f_xy, f_yx, f_yy = lax.map(body_fun, xs=(all_kwargs, index_list))
+
+        return (
+            jnp.sum(f_xx, axis=0),
+            jnp.sum(f_xy, axis=0),
+            jnp.sum(f_yx, axis=0),
+            jnp.sum(f_yy, axis=0),
+        )

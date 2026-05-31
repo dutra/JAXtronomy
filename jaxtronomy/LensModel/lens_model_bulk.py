@@ -123,3 +123,17 @@ class LensModelBulk(object):
         :return: source plane positions corresponding to (x, y) in the image plane
         """
         return self.lens_model.ray_shooting(x, y, **ray_shooting_kwargs)
+
+    @partial(jit, static_argnums=(0,))
+    def hessian(self, x, y, ray_shooting_kwargs):
+        """Hessian matrix for single-plane bulk lens models.
+
+        :param x: x-position (preferentially arcsec)
+        :param y: y-position (preferentially arcsec)
+        :param ray_shooting_kwargs: dict of bulk kwargs, should be obtained by
+            first calling prepare_ray_shooting_kwargs().
+        :return: f_xx, f_xy, f_yx, f_yy components
+        """
+        if self.type == "MultiPlaneBulk":
+            raise NotImplementedError("LensModelBulk.hessian is only implemented for single-plane lensing.")
+        return self.lens_model.hessian(x, y, **ray_shooting_kwargs)

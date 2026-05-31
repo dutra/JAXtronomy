@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from lenstronomy.LensModel.lens_model import LensModel as LensModel_ref
+from jaxtronomy.LensModel.lens_model import LensModel
 from jaxtronomy.LensModel.lens_model_bulk import LensModelBulk
 
 
@@ -119,6 +120,65 @@ class TestLensModelBulk(object):
         )
         npt.assert_allclose(f_x, f_x_ref, atol=1e-12, rtol=1e-12)
         npt.assert_allclose(f_y, f_y_ref, atol=1e-12, rtol=1e-12)
+
+    def test_hessian_single(self):
+        lens_model_list = ["DPIE_NIE", "SHEAR", "DPIE_NIE"]
+        unique_lens_model_list = ["DPIE_NIE", "SHEAR"]
+        lens_model_single = LensModelBulk(
+            unique_lens_model_list=unique_lens_model_list,
+            multi_plane=False,
+        )
+        lens_model_single_ref = LensModel(
+            multi_plane=False,
+            lens_model_list=lens_model_list,
+        )
+        kwargs_lens = [
+            {
+                "sigma0": 1.2,
+                "Ra": 0.15,
+                "Rs": 3.0,
+                "e1": 0.05,
+                "e2": -0.02,
+                "center_x": 0.1,
+                "center_y": -0.1,
+            },
+            {"gamma1": 0.08, "gamma2": -0.03},
+            {
+                "sigma0": 0.4,
+                "Ra": 0.08,
+                "Rs": 1.7,
+                "e1": -0.03,
+                "e2": 0.04,
+                "center_x": -0.2,
+                "center_y": 0.3,
+            },
+        ]
+        x = np.asarray([0.2, 1.0, 3.0], dtype=float)
+        y = np.asarray([0.4, 2.0, -1.0], dtype=float)
+        ray_shooting_kwargs = lens_model_single.prepare_ray_shooting_kwargs(
+            lens_model_list=lens_model_list,
+            kwargs_lens=kwargs_lens,
+            num_deflectors=5,
+        )
+
+        hessian = lens_model_single.hessian(x, y, ray_shooting_kwargs)
+        hessian_ref = lens_model_single_ref.hessian(x, y, kwargs_lens)
+
+        for value, reference in zip(hessian, hessian_ref):
+            npt.assert_allclose(value, reference, atol=1e-12, rtol=1e-12)
+
+    def test_hessian_multi_not_implemented(self):
+        x = np.tile(np.linspace(-5, 5, 20), 20)
+        y = np.repeat(np.linspace(-5, 5, 20), 20)
+        ray_shooting_kwargs = self.lens_model_multi.prepare_ray_shooting_kwargs(
+            lens_model_list=self.lens_model_list,
+            kwargs_lens=self.kwargs_lens,
+            z_source=self.z_source,
+            lens_redshift_list=self.redshift_list,
+        )
+
+        with pytest.raises(NotImplementedError, match="single-plane"):
+            self.lens_model_multi.hessian(x, y, ray_shooting_kwargs)
 
     def test_raises(self):
         # must provide z_source

@@ -1,12 +1,14 @@
 from lenstronomy.Util.util import convert_bool_list
 from warnings import warn
 from functools import partial
+from jax import numpy as jnp
 
 __all__ = ["ProfileListBase"]
 
 _JAXXED_MODELS = [
     "CONVERGENCE",
     "CSE",
+    "DPIE_NIE",
     "EPL",
     "EPL_MULTIPOLE_M1M3M4",
     "EPL_MULTIPOLE_M1M3M4_ELL",
@@ -59,6 +61,7 @@ _SUPPORTED_MODELS = [
     "CURVED_ARC_SPT",
     "CURVED_ARC_TAN_DIFF",
     "DIPOLE",
+    "DPIE_NIE",
     "DOUBLE_CHAMELEON",
     "EPL",
     "EPL_BOXYDISKY",
@@ -433,6 +436,10 @@ def lens_class(
     #     from lenstronomy.LensModel.Profiles.dipole import Dipole
 
     #     return Dipole(**profile_kwargs)
+    elif lens_type == "DPIE_NIE":
+        from jaxtronomy.LensModel.Profiles.dpie_nie import DPIENIE
+
+        return DPIENIE(**profile_kwargs)
     # elif lens_type == "DOUBLE_CHAMELEON":
     #     from lenstronomy.LensModel.Profiles.chameleon import DoubleChameleon
 
@@ -789,3 +796,19 @@ def _select_kwargs(profile, params):
         return profile.derivatives(x, y, *[all_kwargs[param] for param in params])
 
     return partial(derivative_wrapper, params=params)
+
+
+def _select_hessian_kwargs(profile, params):
+    """Returns a callable function that calculates lensing-potential hessians
+    after down-selecting the relevant kwargs for a given lens model profile.
+
+    This mirrors _select_kwargs for bulk ray shooting.
+    """
+
+    def hessian_wrapper(x, y, all_kwargs, params):
+        return tuple(
+            jnp.zeros_like(x) + value
+            for value in profile.hessian(x, y, *[all_kwargs[param] for param in params])
+        )
+
+    return partial(hessian_wrapper, params=params)
