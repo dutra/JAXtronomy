@@ -9,6 +9,8 @@ _JAXXED_MODELS = [
     "CONVERGENCE",
     "CSE",
     "DPIE_NIE",
+    "DPIE_NIE_E",
+    "NIE_E",
     "EPL",
     "EPL_MULTIPOLE_M1M3M4",
     "EPL_MULTIPOLE_M1M3M4_ELL",
@@ -62,6 +64,8 @@ _SUPPORTED_MODELS = [
     "CURVED_ARC_TAN_DIFF",
     "DIPOLE",
     "DPIE_NIE",
+    "DPIE_NIE_E",
+    "NIE_E",
     "DOUBLE_CHAMELEON",
     "EPL",
     "EPL_BOXYDISKY",
@@ -436,6 +440,14 @@ def lens_class(
     #     from lenstronomy.LensModel.Profiles.dipole import Dipole
 
     #     return Dipole(**profile_kwargs)
+    elif lens_type == "DPIE_NIE_E":
+        from jaxtronomy.LensModel.Profiles.dpie_nie_e import DPIE_NIE_E
+
+        return DPIE_NIE_E(**profile_kwargs)
+    elif lens_type == "NIE_E":
+        from jaxtronomy.LensModel.Profiles.nie_e import NIE_E
+
+        return NIE_E(**profile_kwargs)
     elif lens_type == "DPIE_NIE":
         from jaxtronomy.LensModel.Profiles.dpie_nie import DPIENIE
 
